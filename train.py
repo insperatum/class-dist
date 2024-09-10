@@ -148,7 +148,9 @@ if __name__ == '__main__':
         model = model,
         args = training_args,
         train_dataset = tokenized_ds['train'],
-        eval_dataset = tokenized_ds['val'],
+        eval_dataset={
+            "valid": tokenized_ds['val'],
+        },
         tokenizer = tokenizer,
         data_collator = functools.partial(collate_fn, tokenizer=tokenizer)
     )
