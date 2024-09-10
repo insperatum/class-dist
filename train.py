@@ -14,6 +14,20 @@ from transformers import (
     Trainer
 )
 
+PROMPT = """[INST]You are a helpful assistant that classifies messages into categories of how effective they are at persuading people.
+The categories are quantiles of effectiveness.
+
+The categories are:
+- [0, 0.2): very ineffective
+- [0.2, 0.4): somewhat ineffective
+- [0.4, 0.6): neutral
+- [0.6, 0.8): somewhat effective
+- [0.8, 1]: very effective
+
+[\INST]
+
+"""
+
 def tokenize_examples(examples, tokenizer):
     tokenized_inputs = tokenizer(examples['text'])
     # multi-label classification
@@ -33,20 +47,6 @@ def collate_fn(batch, tokenizer):
     # labels are of shape (batch_size, num_labels) with probability for each label from 0 to 1
     d['labels'] = torch.stack(d['labels'])
     return d
-
-
-# define which metrics to compute for evaluation
-def compute_metrics(p):
-    predictions, labels = p
-    # TODO: change this to custom data set
-    f1_micro = f1_score(labels, predictions > 0, average = 'micro')
-    f1_macro = f1_score(labels, predictions > 0, average = 'macro')
-    f1_weighted = f1_score(labels, predictions > 0, average = 'weighted')
-    return {
-        'f1_micro': f1_micro,
-        'f1_macro': f1_macro,
-        'f1_weighted': f1_weighted
-    }
 
 
 # create custom trainer class to be able to pass label weights and calculate mutilabel loss
@@ -76,7 +76,7 @@ def prepare_data(csv_path):
     random.shuffle(data)
 
     # reshape
-    text, labels = list(zip(*[(row[0], row[1:]) for row in data]))
+    text, labels = list(zip(*[(PROMPT + row[0], row[1:]) for row in data]))
     labels = np.array(labels)
     return text, labels
 
@@ -111,7 +111,10 @@ if __name__ == '__main__':
     # load model
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
-        num_labels=train_labels.shape[1]
+        num_labels=train_labels.shape[1],
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2"
     )
     model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -122,18 +125,22 @@ if __name__ == '__main__':
         per_device_train_batch_size = 8,
         per_device_eval_batch_size = 8,
         warmup_steps = 100,
-        num_train_epochs = 10,
+        num_train_epochs = 3,
         weight_decay = 0.01,
         evaluation_strategy = 'steps',
         save_strategy = 'steps',
         save_steps = 100,
         save_total_limit = 3,
         load_best_model_at_end = True,
-        metric_for_best_model = 'f1_weighted',
-        greater_is_better = True,
+        metric_for_best_model = 'valid_loss"',
+        greater_is_better = False,
         logging_dir = 'logs',
         logging_strategy = 'steps',
-        logging_steps = 10
+        logging_steps = 10,
+        report_to = 'none',
+        bf16 = True,
+        gradient_checkpointing = True,
+        torch_compile = True
     )
 
     # train
@@ -143,8 +150,7 @@ if __name__ == '__main__':
         train_dataset = tokenized_ds['train'],
         eval_dataset = tokenized_ds['val'],
         tokenizer = tokenizer,
-        data_collator = functools.partial(collate_fn, tokenizer=tokenizer),
-        compute_metrics = compute_metrics,
+        data_collator = functools.partial(collate_fn, tokenizer=tokenizer)
     )
 
     trainer.train()
